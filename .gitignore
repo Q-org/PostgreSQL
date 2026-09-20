@@ -1,0 +1,12 @@
+# Navicat本地缓存数据库（不要提交id_cache，这是Navicat本地状态库）
+id_cache.db
+id_cache.db-shm
+id_cache.db-wal
+
+# 系统文件
+Thumbs.db
+.DS_Store
+
+# 临时导出sql
+*.tmp.sql
+*.nb3
