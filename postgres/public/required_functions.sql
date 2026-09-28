@@ -268,6 +268,14 @@ BEFORE UPDATE ON video_frames
 FOR EACH ROW
 EXECUTE FUNCTION public.set_update_time_at();
 
+CREATE OR REPLACE FUNCTION bit_xor(a bit, b bit) RETURNS bit AS $$
+SELECT a # b;
+$$ LANGUAGE sql IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION popcount(b bit) RETURNS bigint AS $$
+SELECT length(replace(b::text, '0', ''));
+$$ LANGUAGE sql IMMUTABLE;
+
 -- ============ 校验脚本（执行完DDL + 回填phash_hex后运行） ============
 /*
 SELECT

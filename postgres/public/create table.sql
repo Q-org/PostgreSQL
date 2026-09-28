@@ -208,33 +208,38 @@ CREATE TABLE "public"."video_frames" (
   "video_id" uuid NOT NULL,
   "raw" jsonb NOT NULL,
   "phash_hex" text GENERATED ALWAYS AS (raw ->> 'phash') STORED,
-  "phash_bits" bit(64) GENERATED ALWAYS AS (
-    public.phash_hex_to_bit64(raw ->> 'phash')
-  ) STORED,
-  "phash_vec" vector(64) GENERATED ALWAYS AS (
-    public.phash_hex_to_vector64(raw ->> 'phash')
-  ) STORED,
-  "frame_type" text GENERATED ALWAYS AS (
-    (raw ->> 'frameType'::text)
-  ) STORED,
-  "workflow_id" text GENERATED ALWAYS AS (
-    (raw ->> 'workflowId'::text)
-  ) STORED,
-  -- ========== 新增普通字段（非生成列，手动填写） ==========
+  "phash_bits" bit(64) GENERATED ALWAYS AS (public.phash_hex_to_bit64(raw ->> 'phash')) STORED,
+  "phash_vec" vector(64) GENERATED ALWAYS AS (public.phash_hex_to_vector64(raw ->> 'phash')) STORED,
+  "frame_type" text GENERATED ALWAYS AS (raw ->> 'frameType') STORED,
+  "workflow_id" text GENERATED ALWAYS AS (raw ->> 'workflowId') STORED,
+  -- 新增生成列
+  "fps" numeric GENERATED ALWAYS AS ((raw ->> 'fps')::numeric) STORED,
+  "dhash" text GENERATED ALWAYS AS (raw ->> 'dhash') STORED,
+  "imagePath" text GENERATED ALWAYS AS (raw ->> 'imagePath') STORED,
+  "gopSampleType" text GENERATED ALWAYS AS (raw ->> 'gopSampleType') STORED,
+
+  "has_image" boolean,
   "review_status" text,
   "review_comment" text,
-  -- ========================================================
-  "pts_time" numeric(12,6) NOT NULL,
-  "idx" int4 NOT NULL,
+  "img_url" text,
+  "risk_ids" uuid[],
+  "pts_time" numeric NOT NULL,
+  "idx" bigint NOT NULL,
   "create_time_at" timestamptz(6) NOT NULL DEFAULT now(),
   "update_time_at" timestamptz(6) NOT NULL DEFAULT now(),
   PRIMARY KEY ("id"),
   FOREIGN KEY ("video_id") REFERENCES "public"."video_meta" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
   UNIQUE ("video_id", "idx"),
-  CHECK (pts_time >= 0::numeric),
-  CHECK (idx >= 0)
+  CONSTRAINT uq_video_frames_vid_pts UNIQUE (video_id, pts_time),
+  CHECK (pts_time >= 0),
+  CHECK (idx >= 0),
+  CHECK ("fps" IS NULL OR "fps" >= 0)
 );
 
+-- 配套索引
+CREATE INDEX IF NOT EXISTS idx_video_frames_vid_fps ON public.video_frames("video_id", "fps");
+CREATE INDEX IF NOT EXISTS idx_video_frames_vid_gopsample ON public.video_frames("video_id", "gopSampleType");
+CREATE INDEX IF NOT EXISTS idx_video_frames_dhash ON public.video_frames("dhash");
 -- =============================================
 -- 创建索引
 -- =============================================
