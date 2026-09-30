@@ -1,99 +1,62 @@
 DROP FUNCTION IF EXISTS loop_frames(uuid);
-DROP FUNCTION IF EXISTS loop_frames(uuid,integer);
-DROP FUNCTION IF EXISTS loop_frames(uuid,integer,numeric);
-
+DROP FUNCTION IF EXISTS loop_frames(uuid, integer);
+DROP FUNCTION IF EXISTS loop_frames(uuid, integer, numeric);
 
 CREATE OR REPLACE FUNCTION loop_frames(
     p_video_id uuid,
     p_distance int DEFAULT 8,
-    p_pts_gap numeric DEFAULT NULL  -- NULL=全对比；单位秒，仅向后对比
+    p_pts_gap numeric DEFAULT NULL
 )
 RETURNS TABLE (
-    frame_pts numeric,
-    similar_pts numeric,
-    distance int
+    a_pts numeric,
+    b_pts_list jsonb,
+    dist_list jsonb
 )
+LANGUAGE sql
 AS $$
-DECLARE
-    rec record;
-    sim record;
-    v_has_similar boolean;
-    v_old_dist int;
-BEGIN
-    SELECT MAX(last_distance) INTO v_old_dist
-    FROM loop_frames_result
-    WHERE video_id = p_video_id;
+    WITH frames AS (
+        SELECT
+            f.id,
+            f.pts_time,
+            f.phash_bits
+        FROM video_frames f
+        WHERE f.video_id = p_video_id
+          AND f.fps <= 0.2
+          AND f.phash_bits IS NOT NULL
+    )
+    SELECT
+        f1.pts_time AS a_pts,
 
-    -- 缓存命中直接返回
-    IF v_old_dist IS NOT NULL AND v_old_dist = p_distance THEN
-        RETURN QUERY
-        SELECT r.frame_pts, r.similar_pts, r.distance
-        FROM loop_frames_result r
-        WHERE r.video_id = p_video_id
-        ORDER BY r.frame_pts, r.distance, r.similar_pts;
-        RETURN;
-    END IF;
+        COALESCE(
+            jsonb_agg(
+                f2.pts_time
+                ORDER BY f2.pts_time
+            ) FILTER (WHERE f2.id IS NOT NULL),
+            '[]'::jsonb
+        ) AS b_pts_list,
 
-    DELETE FROM loop_frames_result WHERE video_id = p_video_id;
+        COALESCE(
+            jsonb_agg(
+                bit_count(f1.phash_bits # f2.phash_bits)
+                ORDER BY f2.pts_time
+            ) FILTER (WHERE f2.id IS NOT NULL),
+            '[]'::jsonb
+        ) AS dist_list
 
-    CREATE TEMP TABLE IF NOT EXISTS tmp_group_member
-    (
-        pts numeric PRIMARY KEY
-    ) ON COMMIT DROP;
+    FROM frames f1
 
-    FOR rec IN
-        SELECT vf.pts_time, vf.phash_bits
-        FROM video_frames vf
-        WHERE vf.video_id = p_video_id AND vf.phash_bits IS NOT NULL
-        ORDER BY vf.pts_time
-    LOOP
-        -- ⚠️ 浮点pts不能直接等于，epsilon 1ms容差判断是否已经入组
-        IF EXISTS (
-            SELECT 1 FROM tmp_group_member m
-            WHERE ABS(m.pts - rec.pts_time) < 0.001
-        ) THEN
-            CONTINUE;
-        END IF;
+    LEFT JOIN frames f2
+      ON f1.pts_time < f2.pts_time
 
-        v_has_similar := false;
+     AND bit_count(
+            f1.phash_bits # f2.phash_bits
+         ) < p_distance
 
-        FOR sim IN
-            SELECT
-                vf.pts_time,
-                bit_count(rec.phash_bits # vf.phash_bits) AS dist
-            FROM video_frames vf
-            WHERE vf.video_id = p_video_id
-              AND vf.phash_bits IS NOT NULL
-              AND vf.pts_time > rec.pts_time
-              AND (p_pts_gap IS NULL OR vf.pts_time <= rec.pts_time + p_pts_gap)
-            ORDER BY vf.pts_time
-        LOOP
-            IF sim.dist < p_distance THEN
-                INSERT INTO loop_frames_result(video_id, frame_pts, similar_pts, distance, last_distance)
-                VALUES (p_video_id, rec.pts_time, sim.pts_time, sim.dist, p_distance);
+     AND (
+            p_pts_gap IS NULL
+            OR f2.pts_time <= f1.pts_time + p_pts_gap
+         )
 
-                INSERT INTO tmp_group_member(pts)
-                VALUES(sim.pts_time)
-                ON CONFLICT DO NOTHING;
-
-                v_has_similar := true;
-            END IF;
-        END LOOP;
-
-        IF NOT v_has_similar THEN
-            INSERT INTO loop_frames_result(video_id, frame_pts, similar_pts, distance, last_distance)
-            VALUES(p_video_id, rec.pts_time, NULL, NULL, p_distance);
-        END IF;
-
-        INSERT INTO tmp_group_member(pts)
-        VALUES(rec.pts_time)
-        ON CONFLICT DO NOTHING;
-    END LOOP;
-
-    RETURN QUERY
-    SELECT r.frame_pts, r.similar_pts, r.distance
-    FROM loop_frames_result r
-    WHERE r.video_id = p_video_id
-    ORDER BY r.frame_pts, r.distance, r.similar_pts;
-END;
-$$ LANGUAGE plpgsql;
+    GROUP BY f1.pts_time
+    ORDER BY f1.pts_time;
+$$;

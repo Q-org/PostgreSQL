@@ -210,23 +210,26 @@ CREATE TABLE "public"."video_meta" (
   "raw" jsonb NOT NULL,
   "file_hash" text,
   "is_valid" boolean NOT NULL DEFAULT true,
-  "create_time_at" timestamptz(6) NOT NULL DEFAULT now(),
-  "update_time_at" timestamptz(6) NOT NULL DEFAULT now(),
 
   "file_path" text GENERATED ALWAYS AS (raw #>> '{fileInfo,filePath}') STORED,
+  "video_fps" numeric GENERATED ALWAYS AS (public.to_numeric(raw #>> '{videoInfo,fps}')) STORED,
+  "duration" numeric GENERATED ALWAYS AS (public.to_numeric(raw #>> '{videoInfo,duration}')) STORED,
+  "video_width" int4 GENERATED ALWAYS AS (public.to_int(raw #>> '{videoInfo,width}')) STORED,
+  "video_height" int4 GENERATED ALWAYS AS (public.to_int(raw #>> '{videoInfo,height}')) STORED,
+
   "video_phash_hex" text GENERATED ALWAYS AS (raw ->> 'videoPhash') STORED,
   "video_phash_vec" vector(64) GENERATED ALWAYS AS (public.phash_hex_to_vector64(raw ->> 'videoPhash')) STORED,
   "file_name" text GENERATED ALWAYS AS (raw #>> '{fileInfo,fileName}') STORED,
   "file_size" bigint GENERATED ALWAYS AS (public.to_bigint(raw #>> '{fileInfo,fileSize}')) STORED,
-  "video_fps" numeric GENERATED ALWAYS AS (public.to_numeric(raw #>> '{videoInfo,fps}')) STORED,
+
   "video_codec" text GENERATED ALWAYS AS (raw #>> '{videoInfo,codec}') STORED,
-  "video_width" int4 GENERATED ALWAYS AS (public.to_int(raw #>> '{videoInfo,width}')) STORED,
-  "video_height" int4 GENERATED ALWAYS AS (public.to_int(raw #>> '{videoInfo,height}')) STORED,
-  "duration" numeric GENERATED ALWAYS AS (public.to_numeric(raw #>> '{videoInfo,duration}')) STORED,
+
   "video_format" text GENERATED ALWAYS AS (raw #>> '{videoInfo,format}') STORED,
   "mtime_at" timestamptz(6) GENERATED ALWAYS AS (public.to_timestamptz(raw #>> '{fileInfo,mtime}')) STORED,
   "atime_at" timestamptz(6) GENERATED ALWAYS AS (public.to_timestamptz(raw #>> '{fileInfo,atime}')) STORED,
 
+  "create_time_at" timestamptz(6) NOT NULL DEFAULT now(),
+  "update_time_at" timestamptz(6) NOT NULL DEFAULT now(),
   "last_modified" timestamptz(6),
   "status" text,
   "processed_at" timestamptz(6),
@@ -324,48 +327,55 @@ CREATE INDEX IF NOT EXISTS idx_video_frames_review_status ON video_frames(review
 CREATE INDEX IF NOT EXISTS idx_video_frames_phash_hnsw ON video_frames USING hnsw (phash_vec vector_l2_ops) WITH (m = 32, ef_construction = 128) WHERE phash_vec IS NOT NULL;
 
 -- ===================== video_process_stage =====================
-CREATE TABLE video_process_stage (
-    id uuid NOT NULL DEFAULT gen_random_uuid(),
-    video_id UUID NOT NULL,
-    stage VARCHAR(30) NOT NULL,
-    status VARCHAR(20) NOT NULL,
-    progress NUMERIC(5,4) DEFAULT 0,
-    error_message TEXT,
-    started_at TIMESTAMPTZ,
-    completed_at TIMESTAMPTZ,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    create_at timestamptz(6) NOT NULL DEFAULT now(),
-    PRIMARY KEY(id),
-    CONSTRAINT uq_video_process_stage UNIQUE (video_id, stage),
-    FOREIGN KEY(video_id) REFERENCES video_meta(id) ON DELETE CASCADE
-);
-
-CREATE INDEX idx_video_process_stage_vid ON video_process_stage(video_id);
+-- CREATE TABLE video_process_stage (
+--     id uuid NOT NULL DEFAULT gen_random_uuid(),
+--     video_id UUID NOT NULL,
+--     stage VARCHAR(30) NOT NULL,
+--     status VARCHAR(20) NOT NULL,
+--     progress NUMERIC(5,4) DEFAULT 0,
+--     error_message TEXT,
+--     started_at TIMESTAMPTZ,
+--     completed_at TIMESTAMPTZ,
+--     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+--     create_at timestamptz(6) NOT NULL DEFAULT now(),
+--     PRIMARY KEY(id),
+--     CONSTRAINT uq_video_process_stage UNIQUE (video_id, stage),
+--     FOREIGN KEY(video_id) REFERENCES video_meta(id) ON DELETE CASCADE
+-- );
+-- 
+-- CREATE INDEX idx_video_process_stage_vid ON video_process_stage(video_id);
 
 -- ===================== loop_frames_result =====================
+-- =====================================================
+-- 1. 修改表结构：移除pts复合外键，改用video_frames.id(uuid)外键
+-- =====================================================
+DROP TABLE IF EXISTS loop_frames_result;
+
+DROP TABLE IF EXISTS loop_frames_result;
+
 CREATE TABLE loop_frames_result
 (
-    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id uuid PRIMARY KEY, -- 直接引用 video_frames.id，本表主键，不自增
     video_id uuid NOT NULL,
     frame_pts numeric NOT NULL,
     similar_pts numeric,
     distance int,
     last_distance int,
     created_at timestamptz DEFAULT now(),
-    CONSTRAINT fk_loop_frame_pts
-        FOREIGN KEY (video_id, frame_pts)
-        REFERENCES video_frames (video_id, pts_time)
-        ON DELETE CASCADE,
-    CONSTRAINT fk_loop_similar_frame_pts
-        FOREIGN KEY (video_id, similar_pts)
-        REFERENCES video_frames (video_id, pts_time)
-        ON DELETE SET NULL
+
+    similar_frame_id uuid,
+
+    -- 主键外键：本表id 关联 video_frames.id，级联删除
+    CONSTRAINT fk_loop_result_frame_id
+        FOREIGN KEY (id) REFERENCES video_frames(id) ON DELETE CASCADE,
+
+    -- 相似帧外键
+    CONSTRAINT fk_loop_result_similar_frame_id
+        FOREIGN KEY (similar_frame_id) REFERENCES video_frames(id) ON DELETE SET NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_loop_frames_result_video
-ON loop_frames_result(video_id);
-CREATE INDEX IF NOT EXISTS idx_loop_frames_result_vid_framepts
-ON loop_frames_result(video_id, frame_pts);
+CREATE INDEX IF NOT EXISTS idx_loop_frames_result_video ON loop_frames_result(video_id);
+CREATE INDEX IF NOT EXISTS idx_loop_frames_result_similar_frame ON loop_frames_result(similar_frame_id);
 
 -- ===================== frame_edge 修复：主键不能包含可空字段 =====================
 CREATE TABLE frame_edge (
@@ -413,3 +423,4 @@ CREATE INDEX idx_frame_edge_a_real ON frame_edge(video_id, a_real_pts) WHERE a_r
 CREATE INDEX idx_frame_edge_b_real ON frame_edge(video_id, b_real_pts) WHERE b_real_pts IS NOT NULL;
 CREATE INDEX idx_frame_edge_a_virt ON frame_edge(video_id, a_virt_idx) WHERE a_virt_idx IS NOT NULL;
 CREATE INDEX idx_frame_edge_b_virt ON frame_edge(video_id, b_virt_idx) WHERE b_virt_idx IS NOT NULL;
+

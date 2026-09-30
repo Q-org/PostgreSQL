@@ -1,53 +1,163 @@
-WITH res AS (
-    SELECT * FROM loop_frames('c2f24707-25bc-4936-b485-928795f66814'::uuid,12)
-),
-group_range AS (
+WITH result AS (
     SELECT
-        frame_pts AS base_pts,
-        MIN(LEAST(frame_pts, similar_pts)) AS clip_start_pts,
-        MAX(GREATEST(frame_pts, similar_pts)) AS clip_end_pts,
-        jsonb_agg(DISTINCT similar_pts ORDER BY similar_pts) AS similar_member_pts,
-        COUNT(DISTINCT similar_pts)::bigint AS member_count
-    FROM res
-    WHERE similar_pts IS NOT NULL
-    GROUP BY frame_pts
+        r.a_pts AS keep_pts,
+        r.b_pts_list,
+        r.dist_list
+    FROM loop_frames(
+        '8648ec25-a389-4901-9916-be5908eaf447'::uuid
+    ) r
+),
+
+expanded AS (
+    SELECT
+        r.keep_pts AS frame_pts,
+        b.pts::numeric AS similar_pts
+    FROM result r
+    CROSS JOIN LATERAL jsonb_array_elements_text(
+        r.b_pts_list
+    ) AS b(pts)
+),
+
+group_range AS (
+
+    -- 有相似帧的组
+    SELECT
+        e.frame_pts AS base_pts,
+
+        MIN(
+            LEAST(
+                e.frame_pts,
+                e.similar_pts
+            )
+        ) AS clip_start_pts,
+
+        MAX(
+            GREATEST(
+                e.frame_pts,
+                e.similar_pts
+            )
+        ) AS clip_end_pts,
+
+        jsonb_agg(
+            DISTINCT e.similar_pts
+            ORDER BY e.similar_pts
+        ) AS similar_member_pts,
+
+        COUNT(
+            DISTINCT e.similar_pts
+        )::bigint AS member_count
+
+    FROM expanded e
+    GROUP BY e.frame_pts
 
     UNION ALL
 
+    -- 没有相似帧的组
     SELECT
-        frame_pts AS base_pts,
-        frame_pts AS clip_start_pts,
-        frame_pts AS clip_end_pts,
+        r.keep_pts AS base_pts,
+        r.keep_pts AS clip_start_pts,
+        r.keep_pts AS clip_end_pts,
         '[]'::jsonb AS similar_member_pts,
         0::bigint AS member_count
-    FROM res
-    WHERE similar_pts IS NULL
+
+    FROM result r
+
+    WHERE r.b_pts_list IS NULL
+       OR jsonb_array_length(r.b_pts_list) = 0
+),
+
+raw_result AS (
+    SELECT
+        gr.base_pts AS keep_pts,
+
+        t_base.idx AS keep_idx,
+
+        (
+            jsonb_build_array(gr.base_pts)
+            || gr.similar_member_pts
+        ) AS member_pts,
+
+        gr.member_count,
+
+        (gr.member_count + 1)::bigint AS dedup_count,
+
+        t_base.pts_time,
+
+        t_base.has_image,
+
+        REGEXP_REPLACE(
+            vm.file_path,
+            '\.[^.]+$',
+            ''
+        )
+        || '/frame'
+        || t_base.pts_time
+        || '.jpg' AS review_frame_img_path
+
+    FROM group_range gr
+
+    JOIN video_frames t_base
+      ON t_base.video_id =
+           '8648ec25-a389-4901-9916-be5908eaf447'::uuid
+     AND t_base.pts_time = gr.base_pts
+
+    JOIN video_frames t_start
+      ON t_start.video_id =
+           '8648ec25-a389-4901-9916-be5908eaf447'::uuid
+     AND t_start.pts_time = gr.clip_start_pts
+
+    JOIN video_frames t_end
+      ON t_end.video_id =
+           '8648ec25-a389-4901-9916-be5908eaf447'::uuid
+     AND t_end.pts_time = gr.clip_end_pts
+
+    JOIN video_meta vm
+      ON vm.id =
+           '8648ec25-a389-4901-9916-be5908eaf447'::uuid
+),
+
+filtered_result AS (
+    SELECT
+        r.*
+    FROM raw_result r
+
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM raw_result prev
+
+        WHERE prev.keep_pts < r.keep_pts
+
+          -- 当前 keep_pts 已经被前面某个组包含
+          AND prev.member_pts @> jsonb_build_array(
+              r.keep_pts
+          )
+    )
 )
+
 SELECT
-    ROW_NUMBER() OVER (ORDER BY gr.clip_start_pts) AS seq,
-    gr.base_pts AS keep_pts,
-    t_base.idx AS keep_idx, -- 仅用于图片文件名输出，业务不用
-    -- base_pts合并进数组成完整组pts集合
-    (jsonb_build_array(gr.base_pts) || gr.similar_member_pts) AS member_pts,
-    gr.member_count,
-    (gr.member_count + 1)::bigint AS dedup_count,
-    t_base.pts_time,
-    t_base.has_image,
-    REGEXP_REPLACE(vm.file_path, '\.[^.]+$', '') || '/frame' || t_base.pts_time || '.jpg' AS review_frame_img_path
-FROM group_range gr
-JOIN video_frames t_base
-  ON t_base.video_id = 'c2f24707-25bc-4936-b485-928795f66814'::uuid
-  AND t_base.pts_time = gr.base_pts
-JOIN video_frames t_start
-  ON t_start.video_id = 'c2f24707-25bc-4936-b485-928795f66814'::uuid
-  AND t_start.pts_time = gr.clip_start_pts
-JOIN video_frames t_end
-  ON t_end.video_id = 'c2f24707-25bc-4936-b485-928795f66814'::uuid
-  AND t_end.pts_time = gr.clip_end_pts
-JOIN video_meta vm
-    ON vm.id = 'c2f24707-25bc-4936-b485-928795f66814'::uuid
-ORDER BY gr.clip_start_pts;
+    ROW_NUMBER() OVER (
+        ORDER BY fr.keep_pts
+    ) AS seq,
 
+    fr.keep_pts,
 
+    fr.keep_idx,
 
-select * FROM public.process_video_review('c2f24707-25bc-4936-b485-928795f66814'::uuid);
+    fr.member_pts,
+
+    fr.member_count,
+
+    fr.dedup_count,
+
+    fr.pts_time,
+
+    fr.has_image,
+
+    fr.review_frame_img_path
+
+FROM filtered_result fr
+
+ORDER BY fr.keep_pts;
+
+select * FROM public.process_video_review('8648ec25-a389-4901-9916-be5908eaf447'::uuid);
+
