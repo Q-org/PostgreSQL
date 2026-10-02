@@ -1,6 +1,6 @@
 WITH const AS (
     SELECT
-        1::numeric AS fps,
+        0.2::numeric AS fps,
         0::numeric AS base
 ),
 
@@ -19,7 +19,7 @@ video_info AS (
         ROUND(1.0 / c.fps, 6) AS step
     FROM video_meta AS m
     CROSS JOIN const AS c
-    WHERE m.id = '8648ec25-a389-4901-9916-be5908eaf447'
+    WHERE m.id = '3b06d824-d067-455c-8395-9948d8a59278'
 ),
 
 /*
@@ -149,4 +149,4 @@ SELECT
 FROM stat;
 
 
-SELECT  *  FROM   public.get_video_frame_stat('8648ec25-a389-4901-9916-be5908eaf447',0.5)
+SELECT  *  FROM   public.get_video_frame_stat('3b06d824-d067-455c-8395-9948d8a59278',1)

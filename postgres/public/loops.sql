@@ -5,6 +5,7 @@ WITH frames AS (
         f.phash_bits
     FROM video_frames f
     WHERE f.video_id = '8648ec25-a389-4901-9916-be5908eaf447'
+      AND f.fps <= 0.2
       AND f.phash_bits IS NOT NULL
 )
 SELECT

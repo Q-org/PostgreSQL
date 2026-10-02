@@ -4,7 +4,7 @@ WITH result AS (
         r.b_pts_list,
         r.dist_list
     FROM loop_frames(
-        '8648ec25-a389-4901-9916-be5908eaf447'::uuid
+        '3b06d824-d067-455c-8395-9948d8a59278'::uuid
     ) r
 ),
 
@@ -98,22 +98,22 @@ raw_result AS (
 
     JOIN video_frames t_base
       ON t_base.video_id =
-           '8648ec25-a389-4901-9916-be5908eaf447'::uuid
+           '3b06d824-d067-455c-8395-9948d8a59278'::uuid
      AND t_base.pts_time = gr.base_pts
 
     JOIN video_frames t_start
       ON t_start.video_id =
-           '8648ec25-a389-4901-9916-be5908eaf447'::uuid
+           '3b06d824-d067-455c-8395-9948d8a59278'::uuid
      AND t_start.pts_time = gr.clip_start_pts
 
     JOIN video_frames t_end
       ON t_end.video_id =
-           '8648ec25-a389-4901-9916-be5908eaf447'::uuid
+           '3b06d824-d067-455c-8395-9948d8a59278'::uuid
      AND t_end.pts_time = gr.clip_end_pts
 
     JOIN video_meta vm
       ON vm.id =
-           '8648ec25-a389-4901-9916-be5908eaf447'::uuid
+           '3b06d824-d067-455c-8395-9948d8a59278'::uuid
 ),
 
 filtered_result AS (
@@ -159,5 +159,5 @@ FROM filtered_result fr
 
 ORDER BY fr.keep_pts;
 
-select * FROM public.process_video_review('8648ec25-a389-4901-9916-be5908eaf447'::uuid);
+select * FROM public.process_video_review('3b06d824-d067-455c-8395-9948d8a59278'::uuid);
 

@@ -255,25 +255,7 @@ CREATE INDEX IF NOT EXISTS idx_video_meta_processed_at ON public.video_meta(proc
 CREATE INDEX IF NOT EXISTS idx_video_meta_phash_hnsw ON video_meta USING hnsw (video_phash_vec vector_l2_ops) WHERE video_phash_vec IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_video_meta_file_path ON public.video_meta(file_path);
 
--- ===================== review_risk =====================
-CREATE TABLE public.review_risk (
-    id uuid NOT NULL DEFAULT gen_random_uuid(),
-    risk_code text NOT NULL UNIQUE,
-    risk_name text NOT NULL,
-    risk_level int NOT NULL,
-    description text,
-    is_active boolean NOT NULL DEFAULT true,
-    create_at timestamptz(6) NOT NULL DEFAULT now(),
-    update_at timestamptz(6) NOT NULL DEFAULT now(),
-    PRIMARY KEY(id)
-);
 
-INSERT INTO public.review_risk(risk_code, risk_name, risk_level, description)
-VALUES
-('vulgar','低俗',2,'低俗画面、不雅动作'),
-('nudity','露点',1,'裸露、露点画面'),
-('bad_tendency','不良倾向',2,'不良价值观、不良导向'),
-('violence','暴力',1,'血腥暴力画面');
 
 -- ===================== video_frames 子表 =====================
 CREATE TABLE "public"."video_frames" (
@@ -304,7 +286,6 @@ CREATE TABLE "public"."video_frames" (
 
   PRIMARY KEY ("id"),
   FOREIGN KEY ("video_id") REFERENCES "public"."video_meta" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-  UNIQUE ("video_id", "idx"),
   CONSTRAINT uq_video_frames_vid_pts UNIQUE (video_id, pts_time),
   CHECK (pts_time >= 0),
   CHECK (idx >= 0),
@@ -424,3 +405,129 @@ CREATE INDEX idx_frame_edge_b_real ON frame_edge(video_id, b_real_pts) WHERE b_r
 CREATE INDEX idx_frame_edge_a_virt ON frame_edge(video_id, a_virt_idx) WHERE a_virt_idx IS NOT NULL;
 CREATE INDEX idx_frame_edge_b_virt ON frame_edge(video_id, b_virt_idx) WHERE b_virt_idx IS NOT NULL;
 
+
+-- ===================== review_risk =====================
+CREATE TABLE IF NOT EXISTS public.review_risk (
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    risk_code text NOT NULL UNIQUE,
+    risk_name text NOT NULL,
+    risk_level int NOT NULL,
+    description text,
+    is_active boolean NOT NULL DEFAULT true,
+    create_at timestamptz(6) NOT NULL DEFAULT now(),
+    update_at timestamptz(6) NOT NULL DEFAULT now(),
+    PRIMARY KEY(id)
+);
+
+INSERT INTO public.review_risk(risk_code, risk_name, risk_level, description)
+VALUES
+('vulgar','低俗',2,'低俗画面、不雅动作'),
+('nudity','露点',1,'裸露、露点画面'),
+('bad_tendency','不良倾向',2,'不良价值观、不良导向'),
+('violence','暴力',1,'血腥暴力画面')
+ON CONFLICT(risk_code) DO NOTHING;
+
+COMMENT ON TABLE public.review_risk IS '审核风险字典表';
+COMMENT ON COLUMN public.review_risk.risk_code IS '风险编码，与analysis_result.result内risk_code对应';
+COMMENT ON COLUMN public.review_risk.risk_name IS '风险中文名称';
+COMMENT ON COLUMN public.review_risk.risk_level IS '风险等级 1高危 2中危';
+COMMENT ON COLUMN public.review_risk.is_active IS '是否启用该风险规则';
+
+-- ===================== video_review_platform
+DROP TABLE IF EXISTS  public.video_review_platform ;
+DROP TABLE IF EXISTS video_review_platform;
+
+CREATE TYPE video_review_result AS ENUM ('pending', 'pass', 'modify', 'reject', 'abort');
+CREATE TYPE review_platform AS ENUM ('bilibili','hongguo','douyin','kuaishou','xiaohongshu','other');
+
+CREATE TABLE video_review_platform (
+    id BIGSERIAL PRIMARY KEY,
+    video_id uuid NOT NULL, -- 和 analysis_result / video_meta / video_frames 统一uuid
+    platform review_platform NOT NULL,
+    filepath TEXT NOT NULL,
+    submit_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    submitter VARCHAR(128),
+    reviewer VARCHAR(128),
+    result video_review_result NOT NULL DEFAULT 'pending',
+    problem_desc TEXT,
+    modify_require TEXT,
+    version VARCHAR(32) NOT NULL DEFAULT 'v1.0',
+    final_conclusion TEXT,
+    platform_resp JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    UNIQUE(video_id, platform, version),
+    FOREIGN KEY (video_id) REFERENCES video_meta(video_id) ON DELETE CASCADE
+);
+
+--索引
+CREATE INDEX idx_vrp_video_id ON video_review_platform(video_id);
+CREATE INDEX idx_vrp_platform ON video_review_platform(platform);
+CREATE INDEX idx_vrp_result ON video_review_platform(result);
+CREATE INDEX idx_vrp_filepath ON video_review_platform(filepath);
+
+--触发器 set_updated_at 复用你已有函数
+CREATE TRIGGER trigger_vrp_updated
+BEFORE UPDATE ON video_review_platform
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+
+-- =====================  public.analysis_result
+DROP TABLE IF EXISTS public.analysis_result;
+CREATE TABLE public.analysis_result (
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    raw jsonb NOT NULL,
+
+    -- STORED生成列，全部从raw自动解析，不可手动写入
+    video_id uuid NOT NULL GENERATED ALWAYS AS ((raw ->> 'video_id')::uuid) STORED,
+    pts_time numeric NOT NULL GENERATED ALWAYS AS ((raw ->> 'pts_time')::numeric) STORED,
+    risk_id uuid NOT NULL GENERATED ALWAYS AS ((raw ->> 'risk_id')::uuid) STORED,
+
+    analysis_type varchar(50) NOT NULL GENERATED ALWAYS AS (raw ->> 'analysis_type') STORED,
+    result jsonb NOT NULL GENERATED ALWAYS AS (raw -> 'result') STORED,
+    model_name varchar(100) GENERATED ALWAYS AS (raw ->> 'model_name') STORED,
+    model_version varchar(20) GENERATED ALWAYS AS (raw ->> 'model_version') STORED,
+    confidence numeric(5,4) GENERATED ALWAYS AS ((raw ->> 'confidence')::numeric(5,4)) STORED,
+
+    create_time_at timestamptz(6) NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (id),
+    -- 关联video_frames，帧删除级联删除分析结果
+    FOREIGN KEY (video_id, pts_time)
+        REFERENCES public.video_frames (video_id, pts_time)
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION,
+
+    CHECK (confidence >= 0::numeric AND confidence <= 1::numeric)
+);
+
+-- 业务唯一约束：video_id + pts_time + risk_id 全局唯一
+CREATE UNIQUE INDEX uk_analysis_result_vid_pts_riskid
+ON public.analysis_result(video_id, pts_time, risk_id);
+
+-- 查询索引
+CREATE INDEX idx_analysis_result_video ON public.analysis_result USING btree (video_id ASC NULLS LAST);
+CREATE INDEX idx_analysis_result_video_pts ON public.analysis_result USING btree (video_id ASC NULLS LAST, pts_time ASC NULLS LAST);
+CREATE INDEX idx_analysis_result_raw_gin ON public.analysis_result USING gin (raw jsonb_ops);
+CREATE INDEX idx_analysis_result_result_gin ON public.analysis_result USING gin (result jsonb_ops);
+CREATE INDEX idx_analysis_result_type ON public.analysis_result USING btree (analysis_type ASC NULLS LAST);
+
+ALTER TABLE public.analysis_result OWNER TO postgres;
+
+COMMENT ON TABLE public.analysis_result IS '✅AI帧风险分析结果表；video_id+pts_time+risk_id 为业务唯一键';
+COMMENT ON COLUMN public.analysis_result.video_id IS '视频ID，从raw解析';
+COMMENT ON COLUMN public.analysis_result.pts_time IS '帧PTS时间戳';
+COMMENT ON COLUMN public.analysis_result.risk_id IS '单条风险记录ID；video_id+pts_time+risk_id 唯一标识一条风险';
+COMMENT ON COLUMN public.analysis_result.raw IS '原始完整模型输入JSONB';
+COMMENT ON COLUMN public.analysis_result.result IS '模型输出结果';
+COMMENT ON COLUMN public.analysis_result.create_time_at IS '记录入库时间';
+
+
+ALTER TABLE public.video_frames
+DROP CONSTRAINT IF EXISTS video_frames_video_id_idx_key;
+
+SELECT conname, pg_get_constraintdef(oid)
+FROM pg_constraint
+WHERE conrelid = 'public.video_frames'::regclass
+  AND contype = 'u';
