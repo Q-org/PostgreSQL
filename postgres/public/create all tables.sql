@@ -277,7 +277,9 @@ CREATE TABLE "public"."video_frames" (
   "has_image" boolean,
   "review_status" text,
   "review_comment" text,
+
   "img_url" text,
+  img_size BIGINT,
   "risk_ids" uuid[],
   "pts_time" numeric NOT NULL,
   "idx" bigint NOT NULL,
@@ -291,6 +293,8 @@ CREATE TABLE "public"."video_frames" (
   CHECK (idx >= 0),
   CHECK ("fps" IS NULL OR "fps" >= 0)
 );
+ALTER TABLE video_frames 
+ADD COLUMN IF NOT EXISTS  img_size BIGINT NULL;-- COMMENT '图片文件大小，单位bytes';
 
 CREATE TRIGGER trg_video_frames_update
 BEFORE UPDATE ON video_frames

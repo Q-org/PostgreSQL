@@ -77,6 +77,8 @@ CREATE TABLE public.analysis_result (
     analysis_type   varchar(64) GENERATED ALWAYS AS (raw ->> 'analysis_type') STORED,
     model_name      varchar(100)GENERATED ALWAYS AS (raw ->> 'model_name') STORED,
     payload_result  jsonb       GENERATED ALWAYS AS (raw -> 'result') STORED,
+    note text GENERATED ALWAYS AS ( raw ->> 'note' ) STORED, -- 新增备注字段
+    
     confidence numeric(6,5) GENERATED ALWAYS AS (
         CASE WHEN raw->>'confidence' ~ '^[+-]?\d+(\.\d+)?$' THEN (raw->>'confidence')::numeric ELSE NULL END
     ) STORED,
@@ -94,7 +96,20 @@ CREATE TABLE public.analysis_result (
         ON DELETE RESTRICT
 );
 
-CREATE INDEX idx_analysis_frame_time ON public.analysis_result (video_id, pts_time);
+-- CREATE UNIQUE INDEX IF NOT EXISTS uk_analysis_result_vid_pts_risk
+-- ON analysis_result(video_id, pts_time, risk_id);
+
+-- CREATE UNIQUE INDEX  uk_video_frame_risk_idx 
+-- ON video_frames(video_id, pts_time, risk_id);
+
+ALTER TABLE frame_edge DROP CONSTRAINT IF EXISTS fk_edge_a_real;
+
+ALTER TABLE public.analysis_result
+DROP  COLUMN IF EXISTS note;
+ALTER TABLE public.analysis_result
+ADD COLUMN IF NOT EXISTS note text GENERATED ALWAYS AS ( raw ->> 'note' ) STORED;
+
+-- CREATE INDEX idx_analysis_frame_time ON public.analysis_result (video_id, pts_time);
 
 CREATE OR REPLACE FUNCTION public.fn_analysis_result_inc_rowver()
 RETURNS trigger LANGUAGE plpgsql AS $$
@@ -116,7 +131,12 @@ CREATE TABLE public.video_review_platform (
     video_id uuid NOT NULL REFERENCES public.video_meta(id) ON DELETE RESTRICT,
     platform public.review_platform NOT NULL,
     version_tag varchar(64) NOT NULL,
+    md  text,
     filepath text,
+    ppt_source_content bytea;
+
+-- video_review_platform_history 审核变更审计历史
+    
     result public.video_review_result NOT NULL DEFAULT 'pending',
     submit_time timestamptz NOT NULL DEFAULT now(),
     status_updated_at timestamptz NOT NULL DEFAULT now(),
@@ -127,11 +147,15 @@ CREATE TABLE public.video_review_platform (
     CONSTRAINT ck_vrp_version_tag_not_empty CHECK (length(trim(version_tag)) > 0),
     CONSTRAINT ck_vrp_rowver_positive CHECK (row_version > 0)
 );
+    ALTER TABLE public.video_review_platform
+    ADD COLUMN if not EXISTS ppt_source_content bytea;
 
 -- video_review_platform_history 审核变更审计历史表
 CREATE TABLE public.video_review_platform_history (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     review_id bigint NOT NULL,
+    old_md  text,
+    new_md  text,
     old_result public.video_review_result,
     new_result public.video_review_result,
     old_status_updated_at timestamptz,
@@ -174,12 +198,14 @@ AS $$
 BEGIN
     INSERT INTO public.video_review_platform_history(
         review_id,
+        old_md, new_md,
         old_result, new_result,
         old_status_updated_at, new_status_updated_at,
         old_updated_at, new_updated_at,
         old_row_version, new_row_version
     ) VALUES (
         OLD.id,
+        OLD.md, NEW.md,
         OLD.result, NEW.result,
         OLD.status_updated_at, NEW.status_updated_at,
         OLD.updated_at, NEW.updated_at,
@@ -199,6 +225,9 @@ ANALYZE
 
 COMMIT;
 
+
 -- 事后权限加固，按需启用
 -- ALTER FUNCTION public.fn_capture_vrp_audit_history() OWNER TO audit_owner;
 -- GRANT INSERT ON public.video_review_platform_history TO audit_owner;
+
+

@@ -1,4 +1,7 @@
 DROP FUNCTION IF EXISTS public.get_video_frame_info(uuid,numeric);
+DROP FUNCTION IF EXISTS public.get_video_frame_info(uuid,numeric);
+DROP FUNCTION IF EXISTS public.get_video_frame_info(uuid,numeric,numeric);
+
 CREATE OR REPLACE FUNCTION public.get_video_frame_info(
     p_video_id uuid,
     p_fps numeric DEFAULT 1
@@ -13,17 +16,17 @@ AS $$
 DECLARE
     v_duration numeric;
 BEGIN
+    -- ⚠️确认：video_meta 表中存储时长的字段，这里假设字段名叫 duration；
+    -- 如果你的表实际不是 duration，改成真实字段名！
     SELECT b.duration INTO v_duration
     FROM video_meta b
     WHERE b.id = p_video_id;
 
-    --元数据不存在
     IF NOT FOUND THEN
         RETURN QUERY SELECT 0::bigint, 0::bigint, 'NotFound'::text;
         RETURN;
     END IF;
 
-    --元数据一定存在，子查询统计帧，不受video_frames空表影响
     RETURN QUERY
     SELECT
         FLOOR(COALESCE(v_duration, 0) * p_fps)::bigint AS frame_count,
@@ -40,7 +43,6 @@ BEGIN
         FROM video_frames
         WHERE video_id = p_video_id
     ) stat;
-
 END;
 $$;
 

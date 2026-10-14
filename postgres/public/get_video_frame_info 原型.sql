@@ -7,7 +7,7 @@ frame_stat AS (
         COUNT(CASE WHEN pts_time IS NOT NULL THEN id END) AS real_frame_count,
         BOOL_OR(has_image = true) AS has_any_image
     FROM video_frames
-    WHERE video_id = '8648ec25-a389-4901-9916-be5908eaf447'
+    WHERE video_id = '4e828a08-9724-4a85-b551-37ba502750b7'
     GROUP BY video_id
 )
 SELECT
@@ -23,11 +23,11 @@ SELECT
 FROM video_meta b
 CROSS JOIN cfg
 LEFT JOIN frame_stat fs ON fs.video_id = b.id
-WHERE b.id = '8648ec25-a389-4901-9916-be5908eaf447';
+WHERE b.id = '4e828a08-9724-4a85-b551-37ba502750b7';
 
 
 -- 不传fps，自动使用默认值1
 --
-SELECT * from get_video_frame_info('8648ec25-a389-4901-9916-be5908eaf447',0.2); 
+SELECT * from get_video_frame_info('4e828a08-9724-4a85-b551-37ba502750b7',0.2); 
 -- 手动指定fps=2
-SELECT * FROM get_video_frame_info('8648ec25-a389-4901-9916-be5908eaf447',2);
+SELECT * FROM get_video_frame_info('4e828a08-9724-4a85-b551-37ba502750b7',2);
